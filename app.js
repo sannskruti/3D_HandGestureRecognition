@@ -1,7 +1,8 @@
+
+
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import * as tf from "@tensorflow/tfjs";
 import * as handpose from "@tensorflow-models/handpose";
 
 let model;
@@ -10,9 +11,10 @@ let renderer, scene, camera;
 let loadedModel;
 let controls;
 const statusElement = document.getElementById("status");
-let modelScale = 5;
+let modelScale = 4; 
 let isPinching = false;
 let lastPinchDistance = 0;
+let lastHandOpenness = 0;
 
 async function setupCamera() {
   const video = document.getElementById("video");
@@ -151,6 +153,20 @@ function detectPinch(landmarks) {
   };
 }
 
+function calculateHandOpenness(landmarks) {
+
+  const palmCenter = landmarks[0];
+  const fingerTips = [landmarks[8], landmarks[12], landmarks[16], landmarks[20]]; 
+  
+  
+  let totalDistance = 0;
+  fingerTips.forEach(tip => {
+    totalDistance += calculateDistance(palmCenter, tip);
+  });
+  
+  return totalDistance / fingerTips.length;
+}
+
 async function detectHand() {
   const video = document.getElementById("video");
   const predictions = await model.estimateHands(video);
@@ -173,14 +189,17 @@ async function detectHand() {
     const landmarks = predictions[0].landmarks;
 
     const pinch = detectPinch(landmarks);
+    const handOpenness = calculateHandOpenness(landmarks);
+    
 
-    drawHand(ctx, landmarks, pinch);
+    drawHand(ctx, landmarks, pinch, handOpenness);
 
     const palmPosition = landmarks[0];
 
     const normalizedX = ((videoWidth - palmPosition[0]) / videoWidth) * 2 - 1;
     const normalizedY = -((palmPosition[1] / videoHeight) * 2 - 1);
     const normalizedZ = palmPosition[2] / 100;
+
 
     loadedModel.position.x = THREE.MathUtils.lerp(
       loadedModel.position.x,
@@ -192,6 +211,18 @@ async function detectHand() {
       normalizedY * 2,
       0.1
     );
+    
+
+    if (Math.abs(handOpenness - lastHandOpenness) > 5) {
+     
+      const scaleFactor = handOpenness > lastHandOpenness ? 1.03 : 0.97; 
+      modelScale *= scaleFactor;
+      modelScale = THREE.MathUtils.clamp(modelScale, 1, 20);
+      loadedModel.scale.set(modelScale, modelScale, modelScale);
+      
+      lastHandOpenness = handOpenness;
+    }
+
 
     if (pinch.isPinching) {
       if (!isPinching) {
@@ -201,11 +232,6 @@ async function detectHand() {
         const pinchDelta = pinch.distance - lastPinchDistance;
 
         if (Math.abs(pinchDelta) > 1) {
-          const scaleFactor = 1 + pinchDelta * 0.01;
-          modelScale *= scaleFactor;
-          modelScale = THREE.MathUtils.clamp(modelScale, 1, 20);
-          loadedModel.scale.set(modelScale, modelScale, modelScale);
-
           const handRotation = Math.atan2(
             landmarks[5][0] - landmarks[17][0],
             landmarks[5][1] - landmarks[17][1]
@@ -228,7 +254,7 @@ async function detectHand() {
   requestAnimationFrame(detectHand);
 }
 
-function drawHand(ctx, landmarks, pinch) {
+function drawHand(ctx, landmarks, pinch, handOpenness) {
   ctx.fillStyle = "red";
   landmarks.forEach((point) => {
     ctx.beginPath();
@@ -236,13 +262,13 @@ function drawHand(ctx, landmarks, pinch) {
     ctx.fill();
   });
 
-  // Connect fingers
+
   const fingers = [
-    [0, 1, 2, 3, 4], // thumb
-    [0, 5, 6, 7, 8], // index
-    [0, 9, 10, 11, 12], // middle
-    [0, 13, 14, 15, 16], // ring
-    [0, 17, 18, 19, 20], // pinky
+    [0, 1, 2, 3, 4], 
+    [0, 5, 6, 7, 8], 
+    [0, 9, 10, 11, 12], 
+    [0, 13, 14, 15, 16], 
+    [0, 17, 18, 19, 20], 
   ];
 
   ctx.lineWidth = 2;
@@ -273,6 +299,17 @@ function drawHand(ctx, landmarks, pinch) {
     ctx.font = "12px Arial";
     ctx.fillText(`Pinch: ${pinch.distance.toFixed(1)}`, 10, 20);
   }
+  
+
+  ctx.fillStyle = "cyan";
+  ctx.font = "12px Arial";
+  ctx.fillText(`Hand Openness: ${handOpenness.toFixed(1)}`, 10, 40);
+  
+
+  const handStateText = handOpenness > 100 ? "OPEN - Zooming In" : "CLOSED - Zooming Out";
+  ctx.fillStyle = handOpenness > 100 ? "green" : "red";
+  ctx.font = "bold 14px Arial";
+  ctx.fillText(handStateText, 10, 60);
 }
 
 function animate() {
@@ -307,6 +344,26 @@ function setupUIControls() {
       loadedModel.scale.set(modelScale, modelScale, modelScale);
     }
   });
+  
+
+  const instructions = document.createElement("div");
+  instructions.style.position = "absolute";
+  instructions.style.bottom = "10px";
+  instructions.style.left = "10px";
+  instructions.style.color = "white";
+  instructions.style.background = "rgba(0,0,0,0.7)";
+  instructions.style.padding = "10px";
+  instructions.style.borderRadius = "5px";
+  instructions.innerHTML = `
+    <h3>Hand Gesture Controls:</h3>
+    <ul>
+      <li>Open hand → Zoom in</li>
+      <li>Close hand → Zoom out</li>
+      <li>Pinch → Rotate model</li>
+      <li>Move hand → Move model</li>
+    </ul>
+  `;
+  document.body.appendChild(instructions);
 }
 
 async function init() {
